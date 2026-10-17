@@ -296,3 +296,63 @@ async def test_initial_arabic_backend_failure_keeps_existing_contract(backend):
     with pytest.raises(SearchEnrichmentError, match="SYNTHETIC INITIAL"):
         await search_quran(client, "SYNTHETIC QUERY")
     assert client.search_memories.await_count == 3
+
+
+@pytest.mark.parametrize(
+    "primary_text,cached_text,primary_arabic,expected",
+    [
+        (
+            "SYNTHETIC_PRIMARY_ARABIC",
+            "SYNTHETIC_PRIMARY_ARABIC",
+            True,
+            "SYNTHETIC_PRIMARY_ARABIC",
+        ),
+        (" \t\n", "SYNTHETIC_CACHED_ARABIC", True, "SYNTHETIC_CACHED_ARABIC"),
+        (
+            "SYNTHETIC_PRIMARY_ARABIC",
+            "SYNTHETIC_DIFFERENT_CACHED_ARABIC",
+            True,
+            "SYNTHETIC_PRIMARY_ARABIC",
+        ),
+        (
+            "SYNTHETIC_PRIMARY_TRANSLATION",
+            "SYNTHETIC_CACHED_ARABIC",
+            False,
+            "SYNTHETIC_CACHED_ARABIC",
+        ),
+    ],
+    ids=[
+        "valid-primary",
+        "blank-primary",
+        "differing-canonical-records",
+        "translation-primary",
+    ],
+)
+@pytest.mark.asyncio
+async def test_cached_arabic_preserves_valid_primary(
+    backend, primary_text, cached_text, primary_arabic, expected
+):
+    client = backend([])
+    primary = memory(KEYS[0], arabic=primary_arabic)
+    primary.content, primary.relevance_score = primary_text, 0.95
+    cached = memory(KEYS[0], arabic=True)
+    cached.content, cached.relevance_score = cached_text, 0.5
+
+    async def retrieve(**kwargs):
+        assert not kwargs.get("filter_expr"), (
+            "Valid cache must avoid enrichment requests"
+        )
+        if kwargs["space_names"] == ["quran"]:
+            # Arrival order differs from ranking: cached canonical record is first.
+            return [cached, primary] if primary_arabic else [cached]
+        return [] if primary_arabic else [primary]
+
+    client.search_memories.side_effect = retrieve
+    result = await search_quran(client, "SYNTHETIC QUERY")
+    assert len(result.results) == 1
+    row = result.results[0]
+    assert row.text == expected
+    assert (row.ayah_key, row.surah, row.ayah) == (KEYS[0], 2, 153)
+    assert row.relevance_score == 0.95
+    assert row.url == primary.metadata["url"]
+    assert client.search_memories.await_count == 2

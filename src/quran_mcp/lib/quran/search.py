@@ -279,8 +279,9 @@ async def _enrich_arabic_text(
             None
         )
         if ar_uthmani:
-            # Already have it, just update the text field
-            data.text = ar_uthmani.text
+            # Preserve valid primary Arabic; use the cache for other editions or blanks.
+            if data.lang != "ar" or data.edition_id != "ar-uthmani" or not data.text.strip():
+                data.text = ar_uthmani.text
         else:
             ayahs_needing_arabic.append(ayah_key)
 
